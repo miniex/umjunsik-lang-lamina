@@ -1,0 +1,20 @@
+[package]
+name = "umjunsik"
+version = "0.1.0"
+description = "Umjunsik Language compiler targeting Lamina IR"
+license = "Apache-2.0"
+authors = ["Han Damin <miniex@daminstudio.net>"]
+edition = "2024"
+publish = true
+repository = "https://github.com/miniex/umjunsik-lang-lamina"
+documentation = "https://docs.rs/umjunsik"
+readme = "README.md"
+keywords = ["compiler", "esoteric", "language", "lamina", "umjunsik"]
+categories = ["compilers", "parser-implementations"]
+
+[dependencies]
+lamina = { version = "0.0.5" }
+
+[[bin]]
+name = "umjunsik"
+path = "src/main.rs"
