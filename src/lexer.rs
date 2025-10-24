@@ -41,9 +41,9 @@ impl Lexer {
         }
     }
 
-    fn skip_whitespace_except_newline(&mut self) {
+    fn skip_whitespace_except_newline_and_space(&mut self) {
         while let Some(ch) = self.current_char() {
-            if ch == ' ' || ch == '\t' || ch == '\r' {
+            if ch == '\t' || ch == '\r' {
                 self.advance();
             } else {
                 break;
@@ -55,7 +55,7 @@ impl Lexer {
         let mut tokens = Vec::new();
 
         loop {
-            self.skip_whitespace_except_newline();
+            self.skip_whitespace_except_newline_and_space();
 
             let line = self.line;
             let col = self.col;
@@ -63,11 +63,19 @@ impl Lexer {
             match self.current_char() {
                 None => {
                     tokens.push(TokenWithPos {
-                        token: Token::Eof,
+                        token: Token::EOF,
                         line,
                         col,
                     });
                     break;
+                },
+                Some(' ') => {
+                    self.advance();
+                    tokens.push(TokenWithPos {
+                        token: Token::Space,
+                        line,
+                        col,
+                    });
                 },
                 Some('\n') => {
                     self.advance();
@@ -208,7 +216,7 @@ impl Lexer {
         // Keywords: 어떻게, 준, 식, 동탄, 화이팅, 엄, 어
         match keyword.as_str() {
             "어" => {
-                // Could be part of "어떻게" or standalone "어" or repeated "어어어..."
+                // Could be part of "어떻게" or standalone "어" or repeated "어어어..." or "어엄" or "어어엄"
                 if self.current_char() == Some('떻') {
                     // Read "떻게"
                     keyword.push('떻');
@@ -223,15 +231,23 @@ impl Lexer {
                         keyword.push('어');
                         self.advance();
                     }
+                    // Check if there's 엄 after the 어s (for assignment like 어어엄)
+                    if self.current_char() == Some('엄') {
+                        keyword.push('엄');
+                        self.advance();
+                        // DON'T read 어s after 엄 - they belong to the next token
+                    }
+                } else if self.current_char() == Some('엄') {
+                    // Single 어 followed by 엄 (assignment like 어엄)
+                    keyword.push('엄');
+                    self.advance();
+                    // DON'T read 어s after 엄 - they belong to the next token
                 }
                 // else: standalone "어"
             },
             "엄" => {
-                // Could be followed by "어"s for variable indexing
-                while self.current_char() == Some('어') {
-                    keyword.push('어');
-                    self.advance();
-                }
+                // "엄" is always standalone - don't read following "어"s
+                // Those belong to the expression, not the variable name
             },
             "준" | "식" => {
                 // These are complete keywords, don't continue reading
@@ -279,12 +295,28 @@ impl Lexer {
     fn match_keyword(&self, keyword: &str) -> Result<Token, String> {
         // Check for repeated 어 (variable reference)
         if keyword.chars().all(|c| c == '어') {
-            return Ok(Token::Eo);
+            let count = keyword.chars().count();
+            return Ok(Token::Eo(count));
         }
 
-        // Check for 엄 followed by 어s (assignment)
-        if keyword.starts_with('엄') && keyword.chars().skip(1).all(|c| c == '어') {
-            return Ok(Token::Eom);
+        // "엄" is always var1 (standalone, no 어s after it in the token)
+        // The lexer now only produces "엄" without following 어s
+
+        // Check for 어...엄 pattern (assignment: 어엄, 어어엄, ...)
+        // Note: 어s after 엄 are NOT included - they're part of next expression
+        if keyword.contains('엄') {
+            let chars: Vec<char> = keyword.chars().collect();
+            if let Some(eom_pos) = chars.iter().position(|&c| c == '엄') {
+                // Count 어s before 엄
+                let eo_before = chars[..eom_pos].iter().filter(|&&c| c == '어').count();
+                // Check there are no characters after 엄
+                let chars_after_eom = chars.len() - eom_pos - 1;
+
+                // Verify all chars before 엄 are 어 and nothing after 엄
+                if chars_after_eom == 0 && chars[..eom_pos].iter().all(|&c| c == '어') {
+                    return Ok(Token::Eom(eo_before));
+                }
+            }
         }
 
         match keyword {
@@ -293,8 +325,8 @@ impl Lexer {
             "식" => Ok(Token::Sik),
             "동탄" => Ok(Token::Dongtan),
             "화이팅" => Ok(Token::Hwaiting),
-            "엄" => Ok(Token::Eom),
-            "어" => Ok(Token::Eo),
+            "엄" => Ok(Token::Eom(0)),
+            "어" => Ok(Token::Eo(1)),
             // Handle "이 사람이름이냐" (program end marker)
             "이 사람이름이냐" => Ok(Token::IEotteonSaram),
             _ if keyword.contains("사람이름이냐") => Ok(Token::IEotteonSaram),

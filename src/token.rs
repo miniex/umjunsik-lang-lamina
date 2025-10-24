@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // Keywords
-    Eotteohke,     // 어떻게 - program start
-    IEotteonSaram, // 이 사람이름이냐ㅋㅋ - program end
-    Eom,           // 엄 - assignment
-    Eo,            // 어 - variable reference (can be repeated: 어, 어어, 어어어)
+    Eotteohke,         // 어떻게 - program start
+    IEotteonSaram,     // 이 사람이름이냐ㅋㅋ - program end
+    Eom(usize),        // 엄 - assignment with count of preceding 어s (엄=0, 어엄=1, 어어엄=2)
+    Eo(usize),         // 어 - variable reference with count (어=1, 어어=2, 어어어=3)
     Joon,          // 준 - goto
     Sik,           // 식 - console operations
     Dongtan,       // 동탄 - conditional
@@ -26,7 +26,7 @@ pub enum Token {
 
     // Special
     Newline,
-    Eof,
+    EOF,
 }
 
 #[derive(Debug, Clone)]

@@ -15,7 +15,7 @@ impl Parser {
         if self.position < self.tokens.len() {
             &self.tokens[self.position].token
         } else {
-            &Token::Eof
+            &Token::EOF
         }
     }
 
@@ -55,13 +55,19 @@ impl Parser {
                     self.advance();
                     break;
                 },
-                Token::Eof => break,
+                Token::EOF => break,
                 Token::Tilde => {
                     self.advance(); // skip tilde (line separator for one-line code)
                 },
                 _ => {
+                    // Get the line number before parsing the statement
+                    let line_num = if self.position < self.tokens.len() {
+                        self.tokens[self.position].line
+                    } else {
+                        1
+                    };
                     let stmt = self.parse_statement()?;
-                    statements.push(stmt);
+                    statements.push((stmt, line_num));
                 },
             }
         }
@@ -77,7 +83,7 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement, String> {
         match self.current_token() {
-            Token::Eom => self.parse_assignment(),
+            Token::Eom(_) => self.parse_assignment(),
             Token::Sik => self.parse_console(),
             Token::Dongtan => self.parse_conditional(),
             Token::Joon => self.parse_goto(),
@@ -90,10 +96,17 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Result<Statement, String> {
-        // Count the number of 어s after 엄 to determine variable index
-        self.advance(); // skip 엄
-
-        let var_index = self.count_eo_sequence();
+        // Get variable index from token
+        let var_index = match self.current_token().clone() {
+            Token::Eom(eo_count) => {
+                // 엄=1, 어엄=2, 어어엄=3, 어어엄어=4, ...
+                // eo_count is the total number of 어s (before and after 엄)
+                let index = eo_count + 1;
+                self.advance();
+                index
+            },
+            _ => return Err("Expected assignment token (Eom)".to_string()),
+        };
 
         // Check if it's input (식?)
         if matches!(self.current_token(), Token::Sik) {
@@ -106,28 +119,28 @@ impl Parser {
             }
         }
 
+        // Check if there's a value to assign (could be empty/newline)
+        if matches!(self.current_token(), Token::Newline | Token::EOF) {
+            // Assignment with no value (initialize to 0)
+            return Ok(Statement::Assign {
+                var_index,
+                value: Expr::Number(0),
+            });
+        }
+
         // Otherwise, parse the value expression
         let value = self.parse_expr()?;
         Ok(Statement::Assign { var_index, value })
     }
 
     fn count_eo_sequence(&mut self) -> usize {
-        let mut count = 0;
-
-        // The first Eo token itself can represent multiple 어s
-        if matches!(self.current_token(), Token::Eo) {
+        // With new token format, Eo already contains the count
+        if let Token::Eo(count) = self.current_token().clone() {
             self.advance();
-            count = 1; // At minimum, one 어
-
-            // Continue counting if there are more Eo tokens
-            while matches!(self.current_token(), Token::Eo) {
-                self.advance();
-                count += 1;
-            }
+            count
+        } else {
+            0
         }
-
-        // Convert to 0-indexed (1어 = index 0, 2어 = index 1, etc.)
-        if count > 0 { count - 1 } else { 0 }
     }
 
     fn parse_console(&mut self) -> Result<Statement, String> {
@@ -181,7 +194,7 @@ impl Parser {
         let mut body = Vec::new();
         while !matches!(
             self.current_token(),
-            Token::Newline | Token::Tilde | Token::Eof | Token::IEotteonSaram
+            Token::Newline | Token::Tilde | Token::EOF | Token::IEotteonSaram
         ) {
             body.push(self.parse_statement()?);
         }
@@ -193,11 +206,33 @@ impl Parser {
         self.advance(); // skip 준
         let line_expr = self.parse_expr()?;
 
-        // Extract line number
-        if let Expr::Number(line) = line_expr {
-            Ok(Statement::Goto(line as usize))
-        } else {
-            Err("Goto requires a constant line number".to_string())
+        // Evaluate expression to get line number
+        match Self::eval_const_expr(&line_expr) {
+            Some(line) if line > 0 => Ok(Statement::Goto(line as usize)),
+            Some(line) => Err(format!("Goto line number must be positive, got {}", line)),
+            None => Err("Goto requires a constant expression (no variables)".to_string()),
+        }
+    }
+
+    fn eval_const_expr(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Number(n) => Some(*n),
+            Expr::Var(_) => None, // Variables are not constant
+            Expr::Add(l, r) => {
+                let left = Self::eval_const_expr(l)?;
+                let right = Self::eval_const_expr(r)?;
+                Some(left + right)
+            },
+            Expr::Sub(l, r) => {
+                let left = Self::eval_const_expr(l)?;
+                let right = Self::eval_const_expr(r)?;
+                Some(left - right)
+            },
+            Expr::Mul(l, r) => {
+                let left = Self::eval_const_expr(l)?;
+                let right = Self::eval_const_expr(r)?;
+                Some(left * right)
+            },
         }
     }
 
@@ -216,12 +251,8 @@ impl Parser {
         let mut left = self.parse_additive()?;
 
         // Space means multiplication
-        // In our token stream, we don't have explicit space tokens during normal operation
-        // We need to check if the next primary can be multiplied
-        // Actually, looking at the grammar: .. .. means 2 * 2 = 4
-        // So consecutive number expressions multiply
-
-        while self.is_start_of_primary() {
+        while matches!(self.current_token(), Token::Space) {
+            self.advance(); // consume space
             let right = self.parse_additive()?;
             left = Expr::Mul(Box::new(left), Box::new(right));
         }
@@ -232,8 +263,10 @@ impl Parser {
     fn parse_additive(&mut self) -> Result<Expr, String> {
         let mut dots = 0i64;
         let mut commas = 0i64;
+        let mut has_var = false;
+        let mut var_index = 0;
 
-        // Count dots and commas
+        // Count dots and commas, check for variable
         loop {
             match self.current_token() {
                 Token::Dot => {
@@ -244,34 +277,39 @@ impl Parser {
                     commas += 1;
                     self.advance();
                 },
-                Token::Eo => {
-                    // Variable reference
-                    self.position -= dots as usize + commas as usize; // backtrack
-                    dots = 0;
-                    commas = 0;
-                    break;
+                Token::Eo(_) => {
+                    // Variable reference - can appear before or after dots/commas
+                    if !has_var {
+                        var_index = self.count_eo_sequence();
+                        has_var = true;
+                    } else {
+                        // Two variables in a row - stop
+                        break;
+                    }
                 },
                 _ => break,
             }
         }
 
-        if dots > 0 || commas > 0 {
+        // Build expression: variable + number OR just number OR just variable
+        let base_expr = if has_var {
+            Expr::Var(var_index)
+        } else if dots > 0 || commas > 0 {
             return Ok(Expr::Number(dots - commas));
-        }
+        } else {
+            return Err(format!(
+                "Expected expression (dots, commas, or variable), found {:?}",
+                self.current_token()
+            ));
+        };
 
-        // Check for variable
-        if matches!(self.current_token(), Token::Eo) {
-            let var_index = self.count_eo_sequence();
-            return Ok(Expr::Var(var_index));
+        // Add dots/commas to variable if present
+        if dots > 0 || commas > 0 {
+            let number = Expr::Number(dots - commas);
+            Ok(Expr::Add(Box::new(base_expr), Box::new(number)))
+        } else {
+            Ok(base_expr)
         }
-
-        Err(format!(
-            "Expected expression (dots, commas, or variable), found {:?}",
-            self.current_token()
-        ))
     }
 
-    fn is_start_of_primary(&self) -> bool {
-        matches!(self.current_token(), Token::Dot | Token::Comma | Token::Eo)
-    }
 }

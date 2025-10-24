@@ -1,6 +1,6 @@
 [package]
 name = "umjunsik"
-version = "0.1.1"
+version = "0.2.0"
 description = "Umjunsik Language compiler targeting Lamina IR"
 license = "Apache-2.0"
 authors = ["Han Damin <miniex@daminstudio.net>"]
@@ -13,6 +13,7 @@ keywords = ["compiler", "esoteric", "language", "lamina", "umjunsik"]
 categories = ["compilers", "parser-implementations"]
 
 [dependencies]
+clap = { version = "4.5.50", features = ["derive"] }
 lamina = { version = "0.0.5" }
 
 [[bin]]

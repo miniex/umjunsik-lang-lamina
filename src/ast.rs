@@ -32,5 +32,5 @@ pub enum Statement {
 
 #[derive(Debug)]
 pub struct Program {
-    pub statements: Vec<Statement>,
+    pub statements: Vec<(Statement, usize)>, // (statement, line_number)
 }
