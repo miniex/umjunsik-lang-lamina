@@ -45,6 +45,11 @@ impl CodeGenerator {
             self.var_ptrs.insert(var_idx, ptr);
         }
 
+        // Add jump to first line if we have statements
+        if !program.statements.is_empty() {
+            self.output.push_str("    jmp line_1\n");
+        }
+
         for (idx, stmt) in program.statements.iter().enumerate() {
             // Add label for this statement (for goto)
             if idx < self.line_labels.len() {
@@ -54,7 +59,13 @@ impl CodeGenerator {
                 }
             }
 
-            self.generate_statement(stmt)?;
+            let needs_jump = self.generate_statement(stmt)?;
+
+            // Add fall-through jump to next line if this statement doesn't end with a terminator
+            if needs_jump && idx + 1 < program.statements.len() {
+                let next_label = &self.line_labels[idx + 1];
+                self.output.push_str(&format!("    jmp {}\n", next_label));
+            }
         }
 
         // Default return
@@ -121,7 +132,7 @@ impl CodeGenerator {
         }
     }
 
-    fn generate_statement(&mut self, stmt: &Statement) -> Result<(), String> {
+    fn generate_statement(&mut self, stmt: &Statement) -> Result<bool, String> {
         match stmt {
             Statement::Assign { var_index, value } => {
                 let expr_var = self.generate_expr(value)?;
@@ -131,7 +142,7 @@ impl CodeGenerator {
                 } else {
                     return Err(format!("Variable index {} out of range", var_index));
                 }
-                Ok(())
+                Ok(true) // Needs fall-through jump
             },
             Statement::Input { var_index } => {
                 // Read integer from stdin using scanf-like function
@@ -144,25 +155,27 @@ impl CodeGenerator {
                     self.output
                         .push_str(&format!("    ; (placeholder) store.i64 {}, 0\n", ptr));
                 }
-                Ok(())
+                Ok(true) // Needs fall-through jump
             },
             Statement::PrintNum(expr) => {
                 let expr_var = self.generate_expr(expr)?;
                 self.output.push_str(&format!("    print {}\n", expr_var));
-                Ok(())
+                Ok(true) // Needs fall-through jump
             },
             Statement::PrintChar(expr) => {
                 let expr_var = self.generate_expr(expr)?;
-                // Print character - we use printchar which prints the ASCII/Unicode character
-                self.output.push_str(&format!("    printchar {}\n", expr_var));
-                Ok(())
+                // Print character using writebyte instruction
+                let result = self.new_var();
+                self.output.push_str(&format!("    {} = writebyte {}\n", result, expr_var));
+                Ok(true) // Needs fall-through jump
             },
             Statement::PrintNewline => {
                 // Print newline character (ASCII 10)
                 let newline = self.new_var();
                 self.output.push_str(&format!("    {} = add.i64 10, 0\n", newline));
-                self.output.push_str(&format!("    printchar {}\n", newline));
-                Ok(())
+                let result = self.new_var();
+                self.output.push_str(&format!("    {} = writebyte {}\n", result, newline));
+                Ok(true) // Needs fall-through jump
             },
             Statement::Conditional { condition, body } => {
                 let cond_var = self.generate_expr(condition)?;
@@ -188,13 +201,13 @@ impl CodeGenerator {
 
                 // Else block (continue)
                 self.output.push_str(&format!("\n  {}:\n", else_block));
-                Ok(())
+                Ok(true) // Needs fall-through jump
             },
             Statement::Goto(line) => {
                 if *line > 0 && *line <= self.line_labels.len() {
                     let label = &self.line_labels[*line - 1];
                     self.output.push_str(&format!("    jmp {}\n", label));
-                    Ok(())
+                    Ok(false) // Already has terminator, no fall-through needed
                 } else {
                     Err(format!("Invalid goto line: {}", line))
                 }
@@ -202,7 +215,7 @@ impl CodeGenerator {
             Statement::Return(expr) => {
                 let expr_var = self.generate_expr(expr)?;
                 self.output.push_str(&format!("    ret.i64 {}\n", expr_var));
-                Ok(())
+                Ok(false) // Already has terminator, no fall-through needed
             },
         }
     }
